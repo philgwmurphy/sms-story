@@ -30,7 +30,7 @@ export default async function handler(req, res) {
     const updatedStory = await addToStory(fromNumber, trimmedMessage);
     
     // Send response
-    const twiml = new MessagingResponse();
+    const twiml = new twilio.twiml.MessagingResponse();
     twiml.message(updatedStory);
     
     res.writeHead(200, { 'Content-Type': 'text/xml' });
@@ -123,7 +123,7 @@ async function addToStory(fromNumber, newMessage) {
 }
 
 function sendErrorResponse(res, message) {
-  const twiml = new MessagingResponse();
+  const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(message);
   
   res.writeHead(200, { 'Content-Type': 'text/xml' });
