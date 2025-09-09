@@ -1,0 +1,11 @@
+{
+  "name": "collaborative-story-sms",
+  "version": "1.0.0",
+  "description": "Collaborative storytelling via SMS",
+  "main": "api/sms.js",
+  "type": "module",
+  "dependencies": {
+    "@upstash/redis": "^1.28.4",
+    "twilio": "^4.20.0"
+  }
+}
