@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { MessagingResponse } from 'twilio/lib/twiml/MessagingResponse.js';
+import twilio from 'twilio';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
