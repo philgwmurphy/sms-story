@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis';
+import { MessagingResponse } from 'twilio/lib/twiml/MessagingResponse.js';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -6,25 +7,125 @@ const redis = new Redis({
 });
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const storyKey = `story:${today}`;
-    const countKey = `count:${today}`;
+    const { From: fromNumber, Body: messageBody } = req.body;
     
-    const [currentStory, messageCount] = await Promise.all([
-      redis.get(storyKey),
-      redis.get(countKey)
-    ]);
+    if (!messageBody) {
+      return sendErrorResponse(res, "Please send a message to add to the story!");
+    }
+
+    const trimmedMessage = messageBody.trim();
     
-    res.json({
-      date: today,
-      story: currentStory || "No story started yet today!",
-      messageCount: parseInt(messageCount) || 0,
-      messagesRemaining: 50 - (parseInt(messageCount) || 0)
-    });
+    // Validate message
+    const validation = await validateMessage(fromNumber, trimmedMessage);
+    if (!validation.isValid) {
+      return sendErrorResponse(res, validation.error);
+    }
+
+    // Add to story
+    const updatedStory = await addToStory(fromNumber, trimmedMessage);
+    
+    // Send response
+    const twiml = new MessagingResponse();
+    twiml.message(updatedStory);
+    
+    res.writeHead(200, { 'Content-Type': 'text/xml' });
+    res.end(twiml.toString());
     
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ error: 'Failed to get story status' });
+    return sendErrorResponse(res, "Something went wrong. Please try again!");
   }
+}
+
+async function validateMessage(fromNumber, message) {
+  // Character limit check
+  if (message.length > 75) {
+    return { 
+      isValid: false, 
+      error: `Message too long! Please keep it under 75 characters. (You sent ${message.length})` 
+    };
+  }
+
+  if (message.length < 1) {
+    return { 
+      isValid: false, 
+      error: "Please send a message to add to the story!" 
+    };
+  }
+
+  // Rate limiting check
+  const now = new Date();
+  const today = now.toISOString().split('T')[0]; // YYYY-MM-DD
+  const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000);
+
+  // Check if user sent message in last 10 minutes
+  const lastMessageKey = `last:${fromNumber}`;
+  const lastMessageTime = await redis.get(lastMessageKey);
+  
+  if (lastMessageTime) {
+    const lastTime = new Date(lastMessageTime);
+    if (lastTime > tenMinutesAgo) {
+      const waitMinutes = Math.ceil((lastTime.getTime() + 10 * 60 * 1000 - now.getTime()) / 60000);
+      return { 
+        isValid: false, 
+        error: `Please wait ${waitMinutes} more minute(s) before adding to the story.` 
+      };
+    }
+  }
+
+  // Check daily message limit
+  const dailyCountKey = `count:${today}`;
+  const currentCount = await redis.get(dailyCountKey) || 0;
+  
+  if (parseInt(currentCount) >= 50) {
+    return { 
+      isValid: false, 
+      error: "Today's story is complete! Check back tomorrow for a new story." 
+    };
+  }
+
+  return { isValid: true };
+}
+
+async function addToStory(fromNumber, newMessage) {
+  const now = new Date();
+  const today = now.toISOString().split('T')[0];
+  
+  // Get current story
+  const storyKey = `story:${today}`;
+  const currentStory = await redis.get(storyKey) || "";
+  
+  // Build new story
+  let updatedStory;
+  if (currentStory) {
+    updatedStory = currentStory + " " + newMessage;
+  } else {
+    updatedStory = newMessage;
+  }
+  
+  // Update story with 24hr expiry
+  await redis.set(storyKey, updatedStory, { ex: 86400 });
+  
+  // Update rate limiting counters
+  await redis.set(`last:${fromNumber}`, now.toISOString(), { ex: 86400 });
+  
+  // Increment daily count
+  const dailyCountKey = `count:${today}`;
+  await redis.incr(dailyCountKey);
+  await redis.expire(dailyCountKey, 86400);
+  
+  return updatedStory;
+}
+
+function sendErrorResponse(res, message) {
+  const twiml = new MessagingResponse();
+  twiml.message(message);
+  
+  res.writeHead(200, { 'Content-Type': 'text/xml' });
+  res.end(twiml.toString());
 }
